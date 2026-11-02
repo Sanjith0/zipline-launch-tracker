@@ -1,6 +1,6 @@
 # Merchant Launch Tracker
 
-Take-home case study for the Zipline Launch & Scale Intern role (Summer 2027). The tool shows where every merchant sits in the launch process, how often the team is meeting its targets, and where the bottlenecks are by market over time.
+Take-home case study for the Zipline Launch & Scale Intern role. The tool shows where every merchant sits in the launch process, how often the team is meeting its targets, and where the bottlenecks are by market over time.
 
 **Live tool:** https://sanjith0.github.io/zipline-launch-tracker/
 
