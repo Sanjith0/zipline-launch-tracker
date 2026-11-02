@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Merchant Launch Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: an operations console. Sticky control bar (reporting date + market), summary tiles,
+   pipeline + cycle-time charts, bottleneck-over-time views, then the merchant work queue. */
+:root {
+  --bg: #f1f3f2;
+  --panel: #fcfcfb;
+  --panel-2: #f6f7f5;
+  --fg: #141615;
+  --fg-2: #52514e;
+  --muted: #898781;
+  --line: #e1e0d9;
+  --axis: #c3c2b7;
+  --accent: #1c5cab;
+  --accent-soft: #e3edfa;
+  --s1: #86b6ef; --s2: #3987e5; --s3: #1c5cab; --s4: #0d366b;   /* stage ramp: Closed won → Live */
+  --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a;                   /* categorical slots 1–3 */
+  --good: #0ca30c; --warn: #fab219; --bad: #d03b3b;
+  --good-bg: #e2f4e2; --warn-bg: #fff1d1; --bad-bg: #fbe2e2;
+  --heat-lo: #cde2fb; --heat-hi: #0d366b;
+  --font: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111210; --panel: #1a1a19; --panel-2: #212120; --fg: #f0efec; --fg-2: #c3c2b7; --muted: #8f8d87;
+    --line: #2c2c2a; --axis: #383835; --accent: #5598e7; --accent-soft: #1b2a40;
+    --s1: #b7d3f6; --s2: #5598e7; --s3: #256abf; --s4: #184f95;
+    --c1: #3987e5; --c2: #d95926; --c3: #199e70;
+    --good: #0ca30c; --warn: #fab219; --bad: #e05252;
+    --good-bg: #122b12; --warn-bg: #3a2d08; --bad-bg: #3b1616;
+    --heat-lo: #1e2f45; --heat-hi: #9ec5f4;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111210; --panel: #1a1a19; --panel-2: #212120; --fg: #f0efec; --fg-2: #c3c2b7; --muted: #8f8d87;
+  --line: #2c2c2a; --axis: #383835; --accent: #5598e7; --accent-soft: #1b2a40;
+  --s1: #b7d3f6; --s2: #5598e7; --s3: #256abf; --s4: #184f95;
+  --c1: #3987e5; --c2: #d95926; --c3: #199e70;
+  --good: #0ca30c; --warn: #fab219; --bad: #e05252;
+  --good-bg: #122b12; --warn-bg: #3a2d08; --bad-bg: #3b1616;
+  --heat-lo: #1e2f45; --heat-hi: #9ec5f4;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.45; margin: 0; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel); }
+.app { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 48px; max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 15px; font-weight: 600; }
+.eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 500; }
+.sub { color: var(--fg-2); font-size: 13px; margin: 2px 0 0; }
+button, select, input { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 10px; cursor: pointer; }
+button:hover { border-color: var(--axis); background: var(--panel-2); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+select, input[type=date], input[type=search] { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 8px; min-height: 32px; }
+
+/* top bar */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); margin: 0 calc(-1 * max(16px, env(safe-area-inset-left, 0px))) 0 calc(-1 * max(16px, env(safe-area-inset-right, 0px))); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 12px; }
+.top-inner { max-width: 1280px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; }
+.ctl { display: grid; gap: 3px; }
+.ctl label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.ctl .row { display: flex; gap: 4px; align-items: center; }
+.ctl .row button { padding: 5px 8px; }
+
+/* tiles */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 16px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.tile .label { font-size: 12px; color: var(--fg-2); }
+.tile .value { font-size: 30px; font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.tile .value small { font-size: 13px; font-weight: 500; color: var(--fg-2); letter-spacing: 0; }
+.tile .foot { font-size: 12px; color: var(--muted); }
+.tile.focus { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.status.good { color: var(--good); background: var(--good-bg); }
+.status.warn { color: #7a5200; background: var(--warn-bg); }
+.status.bad { color: var(--bad); background: var(--bad-bg); }
+.status.neutral { color: var(--fg-2); background: var(--panel-2); }
+:root[data-theme="dark"] .status.warn { color: var(--warn); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .status.warn { color: var(--warn); } }
+
+/* panels */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px 12px; min-width: 0; display: grid; gap: 10px; align-content: start; }
+.panel-head { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; justify-content: space-between; }
+.panel-head .sub { margin: 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--fg-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.sw.line { width: 16px; height: 2px; border-radius: 1px; }
+.sw.tick { width: 2px; height: 12px; background: var(--fg); border-radius: 1px; }
+svg { display: block; width: 100%; height: auto; max-width: 100%; overflow: visible; }
+svg text { font-family: var(--font); fill: var(--fg-2); font-size: 12px; }
+svg .ax { fill: var(--muted); font-size: 11px; }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .base { stroke: var(--axis); stroke-width: 1; }
+svg .val { fill: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+svg .inlab { fill: #fff; font-size: 11px; font-weight: 500; }
+svg .cat { fill: var(--fg); font-weight: 500; }
+svg .hit { fill: transparent; }
+.chart { min-width: 0; }
+.multiples { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.multiple h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.multiple .note { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* heatmap */
+.heat-wrap { overflow-x: auto; }
+table.heat { border-collapse: separate; border-spacing: 3px; font-variant-numeric: tabular-nums; min-width: 520px; }
+table.heat th { font-weight: 500; font-size: 11px; color: var(--muted); text-align: center; padding: 2px 4px; white-space: nowrap; }
+table.heat th.rowh { text-align: left; color: var(--fg); font-size: 12px; font-weight: 500; }
+table.heat td { text-align: center; padding: 0; }
+table.heat td .cell { border-radius: 4px; padding: 6px 4px 4px; min-width: 52px; display: grid; gap: 0; line-height: 1.15; cursor: default; }
+table.heat td .cell b { font-weight: 600; font-size: 13px; }
+table.heat td .cell i { font-style: normal; font-size: 10px; opacity: 0.8; }
+table.heat td .cell.empty { background: var(--panel-2); color: var(--muted); }
+.heat-legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-2); }
+.heat-legend .ramp { width: 120px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, var(--heat-lo), var(--heat-hi)); }
+
+/* work queue */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2); color: var(--fg-2); cursor: pointer; }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--fg); }
+.queue-ctl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.queue-ctl .spacer { flex: 1; }
+.table-wrap { overflow-x: auto; }
+table.q { border-collapse: collapse; width: 100%; min-width: 860px; font-size: 13px; }
+table.q th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 500; padding: 8px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; cursor: pointer; user-select: none; }
+table.q th.num, table.q td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.q th .arrow { color: var(--accent); margin-left: 3px; }
+table.q td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.q tr:hover td { background: var(--panel-2); }
+table.q td .id { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+table.q td .name { font-weight: 500; }
+.stage { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.stage::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: var(--sc); flex: none; }
+.miss { color: var(--bad); font-weight: 500; }
+.ok { color: var(--muted); }
+.count { color: var(--muted); font-size: 12px; }
+.empty-row td { color: var(--muted); text-align: center; padding: 24px; }
+
+/* method */
+.method { font-size: 12.5px; color: var(--fg-2); display: grid; gap: 6px; max-width: 72ch; }
+.method dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.method dt { font-weight: 500; color: var(--fg); }
+.method dd { margin: 0; }
+
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--fg); color: var(--bg); font-size: 12px; padding: 6px 9px; border-radius: 5px; max-width: 260px; line-height: 1.35; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+.tip b { font-weight: 600; }
+@media (prefers-reduced-motion: no-preference) { .tile, .chip, button { transition: border-color .12s, background .12s; } }
+@media (max-width: 520px) { .tile .value { font-size: 26px; } h1 { font-size: 16px; } }
+</style>
+
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="top-inner">
+      <div>
+        <h1>Merchant Launch Tracker</h1>
+        <p class="sub">Closed won → Ready for activation → Onboarding → Live &nbsp;·&nbsp; targets: Ready within 2 days, Live within 7 days of closed won</p>
+      </div>
+      <div class="controls">
+        <div class="ctl">
+          <label for="reportDate">Reporting date</label>
+          <div class="row">
+            <input type="date" id="reportDate" min="2027-04-05" max="2027-07-31">
+            <button type="button" id="dMinus" title="Back one week">−7d</button>
+            <button type="button" id="dPlus" title="Forward one week">+7d</button>
+            <button type="button" id="dLatest">Latest</button>
+          </div>
+        </div>
+        <div class="ctl">
+          <label for="marketSel">Market</label>
+          <select id="marketSel"><option value="">All markets</option></select>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="grid2">
+    <div class="panel">
+      <div class="panel-head"><h2>Where merchants are right now</h2><p class="sub" id="pipeSub"></p></div>
+      <div class="legend" id="stageLegend"></div>
+      <div class="chart" id="pipeChart"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>Where the time goes</h2><p class="sub">Days per stage, merchants that completed each step</p></div>
+      <div class="legend"><span><span class="sw" style="background:var(--s3)"></span>median</span><span><span class="sw tick"></span>90th percentile</span><span class="count" id="legSub"></span></div>
+      <div class="chart" id="legChart"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Bottlenecks by market over time</h2>
+      <div class="queue-ctl">
+        <label for="heatMetric" class="count">Show</label>
+        <select id="heatMetric">
+          <option value="live7">Live ≤ 7 days, % on target</option>
+          <option value="ready2">Ready ≤ 2 days, % on target</option>
+          <option value="wait">Median wait Ready → Onboarding (days)</option>
+          <option value="overdue">Open merchants past 7 days (count)</option>
+          <option value="volume">Merchants closed won (count)</option>
+        </select>
+      </div>
+    </div>
+    <p class="sub" id="heatSub"></p>
+    <div class="heat-wrap"><table class="heat" id="heat"></table></div>
+    <div class="heat-legend"><span id="heatLo">healthier</span><span class="ramp"></span><span id="heatHi">needs attention</span><span class="count" id="heatNote"></span></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Onboarding capacity: demand vs sessions run</h2><p class="sub">Weekly counts by event date. The queue grows whenever the orange line sits above the green one.</p></div>
+    <div class="legend"><span><span class="sw line" style="background:var(--c1)"></span>Closed won</span><span><span class="sw line" style="background:var(--c2)"></span>Became ready (into onboarding queue)</span><span><span class="sw line" style="background:var(--c3)"></span>Onboarding sessions started</span></div>
+    <div class="multiples" id="multiples"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Work queue</h2><p class="sub" id="queueSub"></p></div>
+    <div class="chips" id="chips"></div>
+    <div class="queue-ctl">
+      <select id="stageFilter">
+        <option value="open">Not yet live</option>
+        <option value="Closed won">Closed won</option>
+        <option value="Ready for activation">Ready for activation</option>
+        <option value="Onboarding">Onboarding</option>
+        <option value="Live">Live</option>
+        <option value="all">All merchants</option>
+      </select>
+      <input type="search" id="search" placeholder="Search merchant or ID" aria-label="Search merchant">
+      <span class="spacer"></span>
+      <span class="count" id="queueCount"></span>
+    </div>
+    <div class="table-wrap"><table class="q" id="queue"></table></div>
+  </section>
+
+  <footer class="panel method">
+    <h2>How the numbers are computed</h2>
+    <dl>
+      <dt>Reporting date</dt><dd>Every stage and metric is evaluated as of this date. Dates after it are ignored, so moving it back replays the pipeline as it looked then. The dataset's last recorded event is 2027‑05‑30; the default is the day after.</dd>
+      <dt>Stage</dt><dd>The latest milestone dated on or before the reporting date.</dd>
+      <dt>% on target</dt><dd>Merchants that met the target ÷ merchants whose outcome is known. A merchant still open but already past the deadline counts as a miss; one still inside the window is excluded as pending. Counting only completed merchants overstates performance, so that figure is shown as a secondary note.</dd>
+      <dt>Days</dt><dd>Calendar days, as the targets are defined.</dd>
+      <dt>Setup data</dt><dd>Readiness requires menu setup and a drone loading location. A missing menu ID or drone loading ID is flagged as a blocker.</dd>
+      <dt>Weeks</dt><dd>Monday‑start weeks, labelled by their first day.</dd>
+    </dl>
+  </footer>
+</div>
+<div id="tip" class="tip" hidden></div>
+
+<script>
+const RAW = [{"id":"M001","name":"Juniper Kitchen - Location 1","market":"Cedar Valley","cw":"2027-05-19","ready":"2027-05-21","onb":"2027-05-24","live":"2027-05-25","menu":"MENU-1001","dload":"DLOAD-2001"},{"id":"M002","name":"Copper Spoon - Location 1","market":"Cedar Valley","cw":"2027-05-20","ready":"2027-05-22","onb":"2027-05-24","live":"2027-05-26","menu":"MENU-1002","dload":"DLOAD-2002"},{"id":"M003","name":"Willow Grill - Location 1","market":"Bayview","cw":"2027-05-24","ready":"2027-05-26","onb":null,"live":null,"menu":"MENU-1003","dload":"DLOAD-2003"},{"id":"M004","name":"Orchard Noodles - Location 1","market":"Northfield","cw":"2027-05-01","ready":"2027-05-03","onb":"2027-05-11","live":"2027-05-12","menu":"MENU-1004","dload":"DLOAD-2004"},{"id":"M005","name":"Maple Table - Location 1","market":"Bayview","cw":"2027-04-29","ready":"2027-05-02","onb":"2027-05-04","live":"2027-05-06","menu":"MENU-1005","dload":"DLOAD-2005"},{"id":"M006","name":"Clover Tacos - Location 1","market":"Bayview","cw":"2027-04-24","ready":"2027-04-26","onb":"2027-04-30","live":"2027-05-01","menu":"MENU-1006","dload":"DLOAD-2006"},{"id":"M007","name":"Bluebird Bakery - Location 1","market":"Northfield","cw":"2027-05-18","ready":"2027-05-20","onb":"2027-05-21","live":"2027-05-23","menu":"MENU-1007","dload":"DLOAD-2007"},{"id":"M008","name":"Pebble Pizza - Location 1","market":"Cedar Valley","cw":"2027-05-05","ready":"2027-05-06","onb":"2027-05-14","live":"2027-05-16","menu":"MENU-1008","dload":"DLOAD-2008"},{"id":"M009","name":"Saffron Bowl - Location 1","market":"Bayview","cw":"2027-04-17","ready":"2027-04-18","onb":"2027-04-21","live":"2027-04-22","menu":"MENU-1009","dload":"DLOAD-2009"},{"id":"M010","name":"Oak Street Deli - Location 1","market":"Bayview","cw":"2027-05-17","ready":"2027-05-18","onb":"2027-05-21","live":"2027-05-23","menu":"MENU-1010","dload":"DLOAD-2010"},{"id":"M011","name":"Fern Cafe - Location 1","market":"Northfield","cw":"2027-05-15","ready":"2027-05-16","onb":null,"live":null,"menu":"MENU-1011","dload":"DLOAD-2011"},{"id":"M012","name":"Sunbeam Sandwiches - Location 1","market":"Bayview","cw":"2027-04-25","ready":"2027-04-26","onb":"2027-04-29","live":"2027-05-01","menu":"MENU-1012","dload":"DLOAD-2012"},{"id":"M013","name":"Acorn Bistro - Location 1","market":"Cedar Valley","cw":"2027-05-26","ready":"2027-05-28","onb":null,"live":null,"menu":"MENU-1013","dload":"DLOAD-2013"},{"id":"M014","name":"Meadow Sushi - Location 1","market":"Bayview","cw":"2027-04-05","ready":"2027-04-06","onb":"2027-04-10","live":"2027-04-11","menu":"MENU-1014","dload":"DLOAD-2014"},{"id":"M015","name":"Poppy Burgers - Location 1","market":"Bayview","cw":"2027-05-03","ready":"2027-05-04","onb":"2027-05-11","live":"2027-05-12","menu":"MENU-1015","dload":"DLOAD-2015"},{"id":"M016","name":"Lantern Lunch - Location 1","market":"Cedar Valley","cw":"2027-05-21","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2016"},{"id":"M017","name":"Birch Breakfast - Location 1","market":"Bayview","cw":"2027-05-29","ready":"2027-05-30","onb":null,"live":null,"menu":"MENU-1017","dload":"DLOAD-2017"},{"id":"M018","name":"Daisy Dumplings - Location 1","market":"Northfield","cw":"2027-05-03","ready":"2027-05-12","onb":"2027-05-13","live":"2027-05-14","menu":"MENU-1018","dload":"DLOAD-2018"},{"id":"M019","name":"Cobalt Curry - Location 1","market":"Cedar Valley","cw":"2027-05-29","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2019"},{"id":"M020","name":"Hearth Pasta - Location 1","market":"Cedar Valley","cw":"2027-05-08","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2020"},{"id":"M021","name":"Sparrow Salads - Location 1","market":"Bayview","cw":"2027-05-23","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2021"},{"id":"M022","name":"Tamarind Kitchen - Location 1","market":"Cedar Valley","cw":"2027-05-09","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2022"},{"id":"M023","name":"Marigold Meals - Location 1","market":"Northfield","cw":"2027-05-02","ready":"2027-05-04","onb":null,"live":null,"menu":"MENU-1023","dload":"DLOAD-2023"},{"id":"M024","name":"Olive Counter - Location 1","market":"Cedar Valley","cw":"2027-04-14","ready":"2027-04-15","onb":"2027-04-18","live":"2027-04-20","menu":"MENU-1024","dload":"DLOAD-2024"},{"id":"M025","name":"Juniper Kitchen - Location 2","market":"Northfield","cw":"2027-05-28","ready":"2027-05-30","onb":null,"live":null,"menu":"MENU-1025","dload":"DLOAD-2025"},{"id":"M026","name":"Copper Spoon - Location 2","market":"Bayview","cw":"2027-05-27","ready":"2027-05-30","onb":null,"live":null,"menu":"MENU-1026","dload":"DLOAD-2026"},{"id":"M027","name":"Willow Grill - Location 2","market":"Cedar Valley","cw":"2027-05-11","ready":"2027-05-13","onb":null,"live":null,"menu":"MENU-1027","dload":"DLOAD-2027"},{"id":"M028","name":"Orchard Noodles - Location 2","market":"Northfield","cw":"2027-04-12","ready":"2027-04-13","onb":"2027-04-18","live":"2027-04-19","menu":"MENU-1028","dload":"DLOAD-2028"},{"id":"M029","name":"Maple Table - Location 2","market":"Bayview","cw":"2027-05-10","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2029"},{"id":"M030","name":"Clover Tacos - Location 2","market":"Northfield","cw":"2027-04-28","ready":"2027-04-29","onb":"2027-05-09","live":"2027-05-11","menu":"MENU-1030","dload":"DLOAD-2030"},{"id":"M031","name":"Bluebird Bakery - Location 2","market":"Northfield","cw":"2027-05-24","ready":"2027-05-25","onb":"2027-05-28","live":null,"menu":"MENU-1031","dload":"DLOAD-2031"},{"id":"M032","name":"Pebble Pizza - Location 2","market":"Bayview","cw":"2027-04-30","ready":"2027-05-01","onb":"2027-05-05","live":"2027-05-07","menu":"MENU-1032","dload":"DLOAD-2032"},{"id":"M033","name":"Saffron Bowl - Location 2","market":"Bayview","cw":"2027-04-16","ready":"2027-04-17","onb":"2027-04-21","live":"2027-04-23","menu":"MENU-1033","dload":"DLOAD-2033"},{"id":"M034","name":"Oak Street Deli - Location 2","market":"Northfield","cw":"2027-05-16","ready":"2027-05-17","onb":null,"live":null,"menu":"MENU-1034","dload":"DLOAD-2034"},{"id":"M035","name":"Fern Cafe - Location 2","market":"Bayview","cw":"2027-05-11","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2035"},{"id":"M036","name":"Sunbeam Sandwiches - Location 2","market":"Bayview","cw":"2027-05-09","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2036"},{"id":"M037","name":"Acorn Bistro - Location 2","market":"Bayview","cw":"2027-05-21","ready":"2027-05-23","onb":"2027-05-25","live":"2027-05-27","menu":"MENU-1037","dload":"DLOAD-2037"},{"id":"M038","name":"Meadow Sushi - Location 2","market":"Bayview","cw":"2027-05-22","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2038"},{"id":"M039","name":"Poppy Burgers - Location 2","market":"Northfield","cw":"2027-05-24","ready":"2027-05-27","onb":null,"live":null,"menu":"MENU-1039","dload":"DLOAD-2039"},{"id":"M040","name":"Lantern Lunch - Location 2","market":"Cedar Valley","cw":"2027-05-22","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2040"},{"id":"M041","name":"Birch Breakfast - Location 2","market":"Cedar Valley","cw":"2027-05-13","ready":"2027-05-15","onb":"2027-05-29","live":null,"menu":"MENU-1041","dload":"DLOAD-2041"},{"id":"M042","name":"Daisy Dumplings - Location 2","market":"Cedar Valley","cw":"2027-05-19","ready":"2027-05-23","onb":null,"live":null,"menu":"MENU-1042","dload":"DLOAD-2042"},{"id":"M043","name":"Cobalt Curry - Location 2","market":"Cedar Valley","cw":"2027-05-28","ready":"2027-05-29","onb":null,"live":null,"menu":"MENU-1043","dload":"DLOAD-2043"},{"id":"M044","name":"Hearth Pasta - Location 2","market":"Cedar Valley","cw":"2027-05-16","ready":"2027-05-17","onb":null,"live":null,"menu":"MENU-1044","dload":"DLOAD-2044"},{"id":"M045","name":"Sparrow Salads - Location 2","market":"Cedar Valley","cw":"2027-05-10","ready":"2027-05-12","onb":null,"live":null,"menu":"MENU-1045","dload":"DLOAD-2045"},{"id":"M046","name":"Tamarind Kitchen - Location 2","market":"Bayview","cw":"2027-04-30","ready":"2027-05-02","onb":"2027-05-06","live":"2027-05-07","menu":"MENU-1046","dload":"DLOAD-2046"},{"id":"M047","name":"Marigold Meals - Location 2","market":"Northfield","cw":"2027-04-19","ready":"2027-04-20","onb":"2027-04-24","live":"2027-04-25","menu":"MENU-1047","dload":"DLOAD-2047"},{"id":"M048","name":"Olive Counter - Location 2","market":"Bayview","cw":"2027-05-21","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2048"},{"id":"M049","name":"Juniper Kitchen - Location 3","market":"Bayview","cw":"2027-05-18","ready":"2027-05-20","onb":null,"live":null,"menu":"MENU-1049","dload":"DLOAD-2049"},{"id":"M050","name":"Copper Spoon - Location 3","market":"Northfield","cw":"2027-05-23","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2050"},{"id":"M051","name":"Willow Grill - Location 3","market":"Cedar Valley","cw":"2027-05-23","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2051"},{"id":"M052","name":"Orchard Noodles - Location 3","market":"Northfield","cw":"2027-05-05","ready":"2027-05-07","onb":null,"live":null,"menu":"MENU-1052","dload":"DLOAD-2052"},{"id":"M053","name":"Maple Table - Location 3","market":"Northfield","cw":"2027-05-14","ready":"2027-05-16","onb":null,"live":null,"menu":"MENU-1053","dload":"DLOAD-2053"},{"id":"M054","name":"Clover Tacos - Location 3","market":"Cedar Valley","cw":"2027-04-11","ready":"2027-04-14","onb":"2027-04-16","live":"2027-04-17","menu":"MENU-1054","dload":"DLOAD-2054"},{"id":"M055","name":"Bluebird Bakery - Location 3","market":"Cedar Valley","cw":"2027-05-19","ready":"2027-05-21","onb":null,"live":null,"menu":"MENU-1055","dload":"DLOAD-2055"},{"id":"M056","name":"Pebble Pizza - Location 3","market":"Cedar Valley","cw":"2027-05-07","ready":"2027-05-08","onb":"2027-05-29","live":null,"menu":"MENU-1056","dload":"DLOAD-2056"},{"id":"M057","name":"Saffron Bowl - Location 3","market":"Bayview","cw":"2027-05-15","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2057"},{"id":"M058","name":"Oak Street Deli - Location 3","market":"Northfield","cw":"2027-04-16","ready":"2027-04-17","onb":"2027-04-21","live":"2027-04-22","menu":"MENU-1058","dload":"DLOAD-2058"},{"id":"M059","name":"Fern Cafe - Location 3","market":"Northfield","cw":"2027-04-26","ready":"2027-04-27","onb":"2027-05-05","live":"2027-05-06","menu":"MENU-1059","dload":"DLOAD-2059"},{"id":"M060","name":"Sunbeam Sandwiches - Location 3","market":"Bayview","cw":"2027-04-20","ready":"2027-04-21","onb":"2027-04-24","live":"2027-04-26","menu":"MENU-1060","dload":"DLOAD-2060"},{"id":"M061","name":"Acorn Bistro - Location 3","market":"Cedar Valley","cw":"2027-05-18","ready":"2027-05-19","onb":null,"live":null,"menu":"MENU-1061","dload":"DLOAD-2061"},{"id":"M062","name":"Meadow Sushi - Location 3","market":"Cedar Valley","cw":"2027-05-14","ready":"2027-05-18","onb":null,"live":null,"menu":"MENU-1062","dload":"DLOAD-2062"},{"id":"M063","name":"Poppy Burgers - Location 3","market":"Cedar Valley","cw":"2027-05-12","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2063"},{"id":"M064","name":"Lantern Lunch - Location 3","market":"Bayview","cw":"2027-05-30","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2064"},{"id":"M065","name":"Birch Breakfast - Location 3","market":"Northfield","cw":"2027-05-19","ready":"2027-05-20","onb":null,"live":null,"menu":"MENU-1065","dload":"DLOAD-2065"},{"id":"M066","name":"Daisy Dumplings - Location 3","market":"Cedar Valley","cw":"2027-04-19","ready":"2027-04-21","onb":"2027-04-23","live":"2027-04-25","menu":"MENU-1066","dload":"DLOAD-2066"},{"id":"M067","name":"Cobalt Curry - Location 3","market":"Bayview","cw":"2027-05-28","ready":"2027-05-29","onb":null,"live":null,"menu":"MENU-1067","dload":"DLOAD-2067"},{"id":"M068","name":"Hearth Pasta - Location 3","market":"Cedar Valley","cw":"2027-05-17","ready":"2027-05-21","onb":null,"live":null,"menu":"MENU-1068","dload":"DLOAD-2068"},{"id":"M069","name":"Sparrow Salads - Location 3","market":"Cedar Valley","cw":"2027-04-07","ready":"2027-04-08","onb":"2027-04-11","live":"2027-04-12","menu":"MENU-1069","dload":"DLOAD-2069"},{"id":"M070","name":"Tamarind Kitchen - Location 3","market":"Northfield","cw":"2027-05-18","ready":"2027-05-20","onb":null,"live":null,"menu":"MENU-1070","dload":"DLOAD-2070"},{"id":"M071","name":"Marigold Meals - Location 3","market":"Northfield","cw":"2027-04-26","ready":"2027-04-28","onb":null,"live":null,"menu":"MENU-1071","dload":"DLOAD-2071"},{"id":"M072","name":"Olive Counter - Location 3","market":"Bayview","cw":"2027-05-26","ready":"2027-05-27","onb":null,"live":null,"menu":"MENU-1072","dload":"DLOAD-2072"},{"id":"M073","name":"Juniper Kitchen - Location 4","market":"Bayview","cw":"2027-04-09","ready":"2027-04-11","onb":"2027-04-12","live":"2027-04-14","menu":"MENU-1073","dload":"DLOAD-2073"},{"id":"M074","name":"Copper Spoon - Location 4","market":"Northfield","cw":"2027-05-15","ready":"2027-05-17","onb":null,"live":null,"menu":"MENU-1074","dload":"DLOAD-2074"},{"id":"M075","name":"Willow Grill - Location 4","market":"Bayview","cw":"2027-05-17","ready":"2027-05-18","onb":null,"live":null,"menu":"MENU-1075","dload":"DLOAD-2075"},{"id":"M076","name":"Orchard Noodles - Location 4","market":"Cedar Valley","cw":"2027-04-23","ready":"2027-04-24","onb":"2027-04-28","live":"2027-04-30","menu":"MENU-1076","dload":"DLOAD-2076"},{"id":"M077","name":"Maple Table - Location 4","market":"Northfield","cw":"2027-05-30","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2077"},{"id":"M078","name":"Clover Tacos - Location 4","market":"Bayview","cw":"2027-05-13","ready":null,"onb":null,"live":null,"menu":null,"dload":"DLOAD-2078"},{"id":"M079","name":"Bluebird Bakery - Location 4","market":"Cedar Valley","cw":"2027-04-06","ready":"2027-04-07","onb":"2027-04-11","live":"2027-04-13","menu":"MENU-1079","dload":"DLOAD-2079"},{"id":"M080","name":"Pebble Pizza - Location 4","market":"Northfield","cw":"2027-04-28","ready":"2027-05-01","onb":"2027-05-28","live":null,"menu":"MENU-1080","dload":"DLOAD-2080"},{"id":"M081","name":"Saffron Bowl - Location 4","market":"Bayview","cw":"2027-04-27","ready":"2027-04-28","onb":"2027-04-30","live":"2027-05-02","menu":"MENU-1081","dload":"DLOAD-2081"},{"id":"M082","name":"Oak Street Deli - Location 4","market":"Bayview","cw":"2027-05-06","ready":"2027-05-07","onb":"2027-05-10","live":"2027-05-12","menu":"MENU-1082","dload":"DLOAD-2082"},{"id":"M083","name":"Fern Cafe - Location 4","market":"Cedar Valley","cw":"2027-05-03","ready":"2027-05-12","onb":"2027-05-12","live":"2027-05-13","menu":"MENU-1083","dload":"DLOAD-2083"},{"id":"M084","name":"Sunbeam Sandwiches - Location 4","market":"Bayview","cw":"2027-05-01","ready":"2027-05-02","onb":"2027-05-07","live":"2027-05-08","menu":"MENU-1084","dload":"DLOAD-2084"},{"id":"M085","name":"Acorn Bistro - Location 4","market":"Cedar Valley","cw":"2027-05-27","ready":"2027-05-28","onb":null,"live":null,"menu":"MENU-1085","dload":"DLOAD-2085"},{"id":"M086","name":"Meadow Sushi - Location 4","market":"Bayview","cw":"2027-05-06","ready":"2027-05-07","onb":"2027-05-11","live":"2027-05-12","menu":"MENU-1086","dload":"DLOAD-2086"},{"id":"M087","name":"Poppy Burgers - Location 4","market":"Bayview","cw":"2027-05-08","ready":"2027-05-09","onb":"2027-05-14","live":"2027-05-15","menu":"MENU-1087","dload":"DLOAD-2087"},{"id":"M088","name":"Lantern Lunch - Location 4","market":"Bayview","cw":"2027-04-20","ready":"2027-04-22","onb":"2027-04-24","live":"2027-04-26","menu":"MENU-1088","dload":"DLOAD-2088"},{"id":"M089","name":"Birch Breakfast - Location 4","market":"Bayview","cw":"2027-04-05","ready":"2027-04-07","onb":"2027-04-09","live":"2027-04-10","menu":"MENU-1089","dload":"DLOAD-2089"},{"id":"M090","name":"Daisy Dumplings - Location 4","market":"Cedar Valley","cw":"2027-04-13","ready":"2027-04-15","onb":"2027-04-17","live":"2027-04-19","menu":"MENU-1090","dload":"DLOAD-2090"},{"id":"M091","name":"Cobalt Curry - Location 4","market":"Northfield","cw":"2027-04-23","ready":"2027-04-25","onb":null,"live":null,"menu":"MENU-1091","dload":"DLOAD-2091"},{"id":"M092","name":"Hearth Pasta - Location 4","market":"Bayview","cw":"2027-05-21","ready":null,"onb":null,"live":null,"menu":null,"dload":null},{"id":"M093","name":"Sparrow Salads - Location 4","market":"Bayview","cw":"2027-05-22","ready":null,"onb":null,"live":null,"menu":null,"dload":null},{"id":"M094","name":"Tamarind Kitchen - Location 4","market":"Bayview","cw":"2027-04-18","ready":"2027-04-19","onb":"2027-04-22","live":"2027-04-23","menu":"MENU-1094","dload":"DLOAD-2094"},{"id":"M095","name":"Marigold Meals - Location 4","market":"Cedar Valley","cw":"2027-05-07","ready":null,"onb":null,"live":null,"menu":"MENU-1095","dload":null},{"id":"M096","name":"Olive Counter - Location 4","market":"Cedar Valley","cw":"2027-05-20","ready":"2027-05-21","onb":null,"live":null,"menu":"MENU-1096","dload":"DLOAD-2096"},{"id":"M097","name":"Juniper Kitchen - Location 5","market":"Northfield","cw":"2027-05-12","ready":"2027-05-14","onb":null,"live":null,"menu":"MENU-1097","dload":"DLOAD-2097"},{"id":"M098","name":"Copper Spoon - Location 5","market":"Northfield","cw":"2027-05-27","ready":"2027-05-29","onb":null,"live":null,"menu":"MENU-1098","dload":"DLOAD-2098"},{"id":"M099","name":"Willow Grill - Location 5","market":"Bayview","cw":"2027-04-24","ready":"2027-04-25","onb":"2027-04-29","live":"2027-05-01","menu":"MENU-1099","dload":"DLOAD-2099"},{"id":"M100","name":"Orchard Noodles - Location 5","market":"Bayview","cw":"2027-04-15","ready":"2027-04-16","onb":"2027-04-21","live":"2027-04-22","menu":"MENU-1100","dload":"DLOAD-2100"},{"id":"M101","name":"Maple Table - Location 5","market":"Cedar Valley","cw":"2027-05-25","ready":"2027-05-27","onb":null,"live":null,"menu":"MENU-1101","dload":"DLOAD-2101"},{"id":"M102","name":"Clover Tacos - Location 5","market":"Bayview","cw":"2027-05-10","ready":null,"onb":null,"live":null,"menu":"MENU-1102","dload":null},{"id":"M103","name":"Bluebird Bakery - Location 5","market":"Northfield","cw":"2027-05-20","ready":null,"onb":null,"live":null,"menu":"MENU-1103","dload":null},{"id":"M104","name":"Pebble Pizza - Location 5","market":"Cedar Valley","cw":"2027-05-13","ready":"2027-05-15","onb":null,"live":null,"menu":"MENU-1104","dload":"DLOAD-2104"},{"id":"M105","name":"Saffron Bowl - Location 5","market":"Cedar Valley","cw":"2027-05-26","ready":"2027-05-27","onb":"2027-05-29","live":null,"menu":"MENU-1105","dload":"DLOAD-2105"},{"id":"M106","name":"Oak Street Deli - Location 5","market":"Bayview","cw":"2027-05-04","ready":"2027-05-06","onb":"2027-05-13","live":"2027-05-14","menu":"MENU-1106","dload":"DLOAD-2106"},{"id":"M107","name":"Fern Cafe - Location 5","market":"Cedar Valley","cw":"2027-04-12","ready":"2027-04-14","onb":"2027-04-16","live":"2027-04-18","menu":"MENU-1107","dload":"DLOAD-2107"},{"id":"M108","name":"Sunbeam Sandwiches - Location 5","market":"Bayview","cw":"2027-05-25","ready":"2027-05-26","onb":null,"live":null,"menu":"MENU-1108","dload":"DLOAD-2108"},{"id":"M109","name":"Acorn Bistro - Location 5","market":"Bayview","cw":"2027-05-29","ready":null,"onb":null,"live":null,"menu":"MENU-1109","dload":null},{"id":"M110","name":"Meadow Sushi - Location 5","market":"Cedar Valley","cw":"2027-05-25","ready":"2027-05-28","onb":null,"live":null,"menu":"MENU-1110","dload":"DLOAD-2110"},{"id":"M111","name":"Poppy Burgers - Location 5","market":"Cedar Valley","cw":"2027-05-20","ready":null,"onb":null,"live":null,"menu":"MENU-1111","dload":null},{"id":"M112","name":"Lantern Lunch - Location 5","market":"Northfield","cw":"2027-05-11","ready":"2027-05-12","onb":null,"live":null,"menu":"MENU-1112","dload":"DLOAD-2112"},{"id":"M113","name":"Birch Breakfast - Location 5","market":"Bayview","cw":"2027-04-10","ready":"2027-04-11","onb":"2027-04-14","live":"2027-04-15","menu":"MENU-1113","dload":"DLOAD-2113"},{"id":"M114","name":"Daisy Dumplings - Location 5","market":"Northfield","cw":"2027-04-21","ready":"2027-04-29","onb":"2027-04-30","live":"2027-05-01","menu":"MENU-1114","dload":"DLOAD-2114"},{"id":"M115","name":"Cobalt Curry - Location 5","market":"Cedar Valley","cw":"2027-04-29","ready":"2027-04-30","onb":"2027-05-04","live":"2027-05-05","menu":"MENU-1115","dload":"DLOAD-2115"},{"id":"M116","name":"Hearth Pasta - Location 5","market":"Cedar Valley","cw":"2027-04-22","ready":"2027-04-23","onb":"2027-04-26","live":"2027-04-27","menu":"MENU-1116","dload":"DLOAD-2116"},{"id":"M117","name":"Sparrow Salads - Location 5","market":"Northfield","cw":"2027-05-17","ready":"2027-05-20","onb":null,"live":null,"menu":"MENU-1117","dload":"DLOAD-2117"},{"id":"M118","name":"Tamarind Kitchen - Location 5","market":"Bayview","cw":"2027-05-23","ready":"2027-05-25","onb":"2027-05-28","live":"2027-05-29","menu":"MENU-1118","dload":"DLOAD-2118"},{"id":"M119","name":"Marigold Meals - Location 5","market":"Cedar Valley","cw":"2027-05-06","ready":"2027-05-15","onb":"2027-05-15","live":"2027-05-17","menu":"MENU-1119","dload":"DLOAD-2119"},{"id":"M120","name":"Olive Counter - Location 5","market":"Bayview","cw":"2027-05-17","ready":"2027-05-19","onb":null,"live":null,"menu":"MENU-1120","dload":"DLOAD-2120"}];
+const DAY = 86400000;
+const parse = s => s ? Date.UTC(+s.slice(0,4), +s.slice(5,7)-1, +s.slice(8,10)) : null;
+const iso = t => new Date(t).toISOString().slice(0,10);
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtD = t => { const d = new Date(t); return MONTHS[d.getUTCMonth()] + ' ' + d.getUTCDate(); };
+const weekStart = t => t - ((new Date(t).getUTCDay() + 6) % 7) * DAY;
+const STAGES = ['Closed won', 'Ready for activation', 'Onboarding', 'Live'];
+const STAGE_VAR = { 'Closed won': 'var(--s1)', 'Ready for activation': 'var(--s2)', 'Onboarding': 'var(--s3)', 'Live': 'var(--s4)' };
+const MARKETS = [...new Set(RAW.map(r => r.market))].sort();
+const LATEST = Math.max(...RAW.flatMap(r => [r.cw, r.ready, r.onb, r.live].filter(Boolean).map(parse))) + DAY;
+const pct = x => x == null || isNaN(x) ? '—' : Math.round(x * 100) + '%';
+const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const quantile = (a, q) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const pos = (s.length - 1) * q; const lo = Math.floor(pos), hi = Math.ceil(pos); return s[lo] + (s[hi] - s[lo]) * (pos - lo); };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+let R = LATEST, market = '', heatMetric = 'live7', stageFilter = 'open', search = '', sortKey = 'priority', sortDir = 1, chip = '';
+
+function compute() {
+  return RAW.filter(r => parse(r.cw) <= R).map(r => {
+    const cw = parse(r.cw);
+    const rd = r.ready && parse(r.ready) <= R ? parse(r.ready) : null;
+    const ob = r.onb && parse(r.onb) <= R ? parse(r.onb) : null;
+    const lv = r.live && parse(r.live) <= R ? parse(r.live) : null;
+    const stage = lv ? 'Live' : ob ? 'Onboarding' : rd ? 'Ready for activation' : 'Closed won';
+    const stageStart = { 'Live': lv, 'Onboarding': ob, 'Ready for activation': rd, 'Closed won': cw }[stage];
+    const age = (R - cw) / DAY;
+    const dReady = rd ? (rd - cw) / DAY : null;
+    const dWait = rd && ob ? (ob - rd) / DAY : null;
+    const dOnb = ob && lv ? (lv - ob) / DAY : null;
+    const dTotal = lv ? (lv - cw) / DAY : null;
+    const readyT = rd ? (dReady <= 2 ? 'met' : 'missed') : (age > 2 ? 'openlate' : 'pending');
+    const liveT = lv ? (dTotal <= 7 ? 'met' : 'missed') : (age > 7 ? 'openlate' : 'pending');
+    const missing = [];
+    if (!r.menu) missing.push('menu');
+    if (!r.dload) missing.push('drone loading location');
+    let action = '';
+    if (stage === 'Closed won') action = missing.length ? 'Collect ' + missing.join(' + ') : 'Complete readiness checks';
+    else if (stage === 'Ready for activation') action = 'Schedule onboarding session';
+    else if (stage === 'Onboarding') action = 'Finish training, verify go-live';
+    return { ...r, cwT: cw, rdT: rd, obT: ob, lvT: lv, stage, age, daysInStage: (R - stageStart) / DAY, dReady, dWait, dOnb, dTotal, readyT, liveT, missing, action, overdue: !lv && age > 7 };
+  });
+}
+
+function rate(rows, key) {
+  const met = rows.filter(r => r[key] === 'met').length;
+  const resolved = rows.filter(r => r[key] !== 'pending').length;
+  const completed = rows.filter(r => r[key] === 'met' || r[key] === 'missed').length;
+  return { met, resolved, completed, rate: resolved ? met / resolved : null, crate: completed ? met / completed : null };
+}
+
+// ---------- tooltip
+const tip = document.getElementById('tip');
+function showTip(html, ev) { tip.innerHTML = html; tip.hidden = false; moveTip(ev); }
+function moveTip(ev) {
+  const pad = 12, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > window.innerWidth - 8) x = ev.clientX - w - pad;
+  if (y + h > window.innerHeight - 8) y = ev.clientY - h - pad;
+  tip.style.left = x + 'px'; tip.style.top = y + 'px';
+}
+function hideTip() { tip.hidden = true; }
+function bindTips(root) {
+  root.querySelectorAll('[data-tip]').forEach(el => {
+    el.addEventListener('mouseenter', ev => showTip(el.dataset.tip, ev));
+    el.addEventListener('mousemove', moveTip);
+    el.addEventListener('mouseleave', hideTip);
+  });
+}
+
+// ---------- KPIs
+function renderKpis(all, rows) {
+  const live = rows.filter(r => r.stage === 'Live').length;
+  const r2 = rate(rows, 'readyT'), r7 = rate(rows, 'liveT');
+  const overdue = rows.filter(r => r.overdue).length;
+  const waiting = rows.filter(r => r.stage === 'Ready for activation');
+  const blocked = rows.filter(r => r.stage === 'Closed won' && r.missing.length);
+  const cls = (v, good, warn) => v == null ? 'neutral' : v >= good ? 'good' : v >= warn ? 'warn' : 'bad';
+  const tiles = [
+    { label: 'Live', value: live, small: 'of ' + rows.length + ' closed won', foot: rows.length - live + ' still in progress' },
+    { label: 'Ready within 2 days', value: pct(r2.rate), status: cls(r2.rate, .9, .75), foot: r2.met + ' of ' + r2.resolved + ' resolved · ' + pct(r2.crate) + ' of those completed' },
+    { label: 'Live within 7 days', value: pct(r7.rate), status: cls(r7.rate, .9, .75), foot: r7.met + ' of ' + r7.resolved + ' resolved · ' + pct(r7.crate) + ' of those completed' },
+    { label: 'Open and past 7 days', value: overdue, status: overdue ? 'bad' : 'good', foot: overdue ? 'oldest ' + Math.max(...rows.filter(r => r.overdue).map(r => r.age)) + ' days since closed won' : 'nothing overdue' },
+    { label: 'Waiting for onboarding', value: waiting.length, status: waiting.filter(r => r.overdue).length ? 'warn' : 'neutral', foot: waiting.length ? 'median ' + median(waiting.map(r => r.daysInStage)) + ' days in Ready · ' + waiting.filter(r => r.overdue).length + ' past 7 days' : '—', focus: true },
+    { label: 'Blocked on setup data', value: blocked.length, status: blocked.length ? 'warn' : 'neutral', foot: blocked.length ? blocked.filter(r => !r.menu).length + ' missing menu · ' + blocked.filter(r => !r.dload).length + ' missing drone loading' : '—' },
+  ];
+  const txt = { good: 'on target', warn: 'watch', bad: 'off target', neutral: '' };
+  document.getElementById('kpis').innerHTML = tiles.map(t => `
+    <div class="tile${t.focus ? ' focus' : ''}">
+      <div class="label">${t.label}</div>
+      <div class="value">${t.value}${t.small ? `<small>${t.small}</small>` : ''}${t.status && txt[t.status] ? `<span class="status ${t.status}">${txt[t.status]}</span>` : ''}</div>
+      <div class="foot">${t.foot}</div>
+    </div>`).join('');
+}
+
+// ---------- pipeline stacked bars
+function renderPipeline(rows) {
+  const el = document.getElementById('pipeChart');
+  const groups = (market ? [market] : [...MARKETS, 'All']).map(m => ({ name: m, rows: m === 'All' ? rows : rows.filter(r => r.market === m) }));
+  const W = Math.max(300, el.clientWidth), labW = 96, rowH = 46, pad = 8, barH = 22;
+  const H = groups.length * rowH + 4;
+  const max = Math.max(1, ...groups.map(g => g.rows.length));
+  const sx = n => (W - labW - pad) * n / max;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Merchants by stage and market">`;
+  groups.forEach((g, i) => {
+    const y = i * rowH + 4;
+    const total = g.rows.length;
+    const overdue = g.rows.filter(r => r.overdue).length;
+    const blocked = g.rows.filter(r => r.stage === 'Closed won' && r.missing.length).length;
+    s += `<text x="0" y="${y + barH / 2 + 4}" class="cat"${g.name === 'All' ? ' font-weight="600"' : ''}>${esc(g.name)}</text>`;
+    let x = labW;
+    STAGES.forEach(st => {
+      const n = g.rows.filter(r => r.stage === st).length;
+      if (!n) return;
+      const w = sx(n), ov = g.rows.filter(r => r.stage === st && r.overdue).length;
+      const tipHtml = `<b>${esc(g.name)} · ${st}</b><br>${n} merchant${n > 1 ? 's' : ''}${st !== 'Live' ? `<br>${ov} past 7 days since closed won` : ''}`;
+      s += `<rect x="${x}" y="${y}" width="${Math.max(0, w - 2)}" height="${barH}" rx="3" fill="${STAGE_VAR[st]}" data-tip="${esc(tipHtml)}"></rect>`;
+      if (w - 2 > 22) s += `<text x="${x + (w - 2) / 2}" y="${y + barH / 2 + 4}" text-anchor="middle" class="inlab" pointer-events="none">${n}</text>`;
+      x += w;
+    });
+    s += `<text x="${labW + sx(total) + 6}" y="${y + barH / 2 + 4}" class="val">${total}</text>`;
+    s += `<text x="${labW}" y="${y + barH + 14}" class="ax">${overdue} past 7 days${blocked ? ` · ${blocked} blocked on setup data` : ''}</text>`;
+  });
+  s += '</svg>';
+  el.innerHTML = s; bindTips(el);
+  document.getElementById('stageLegend').innerHTML = STAGES.map(st => `<span><span class="sw" style="background:${STAGE_VAR[st]}"></span>${st}</span>`).join('');
+  document.getElementById('pipeSub').textContent = `As of ${fmtD(R)}, ${rows.length} merchants closed won${market ? ' in ' + market : ''}`;
+}
+
+// ---------- leg durations
+function renderLegs(rows) {
+  const el = document.getElementById('legChart');
+  const legs = [['dReady', 'Closed won → Ready', 'var(--s2)'], ['dWait', 'Ready → Onboarding', 'var(--s3)'], ['dOnb', 'Onboarding → Live', 'var(--s4)']];
+  const groups = (market ? [market] : [...MARKETS, 'All']).map(m => ({ name: m, rows: m === 'All' ? rows : rows.filter(r => r.market === m) }));
+  const W = Math.max(300, el.clientWidth), labW = 150, pad = 30, barH = 10, gap = 3, groupGap = 12, headH = 18;
+  const groupH = headH + legs.length * (barH + gap) + groupGap;
+  const H = groups.length * groupH + 20;
+  const stats = groups.map(g => legs.map(([k]) => { const v = g.rows.map(r => r[k]).filter(x => x != null); return { med: median(v), p90: quantile(v, .9), n: v.length }; }));
+  const max = Math.max(4, ...stats.flat().map(s => s.p90 || 0));
+  const sx = d => (W - labW - pad) * d / max;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Median and 90th percentile days per stage by market">`;
+  const ticks = max <= 8 ? [0, 2, 4, 6, 8] : max <= 16 ? [0, 4, 8, 12, 16] : [0, 7, 14, 21, 28];
+  ticks.filter(t => t <= max + 0.5).forEach(t => { s += `<line class="grid" x1="${labW + sx(t)}" x2="${labW + sx(t)}" y1="0" y2="${H - 18}"></line><text class="ax" x="${labW + sx(t)}" y="${H - 4}" text-anchor="middle">${t}d</text>`; });
+  groups.forEach((g, gi) => {
+    const y0 = gi * groupH + 2;
+    s += `<text x="0" y="${y0 + 11}" class="cat"${g.name === 'All' ? ' font-weight="600"' : ''}>${esc(g.name)}</text>`;
+    legs.forEach(([k, name, color], li) => {
+      const st = stats[gi][li], y = y0 + headH + li * (barH + gap);
+      s += `<text x="${labW - 8}" y="${y + barH - 1}" text-anchor="end" class="ax">${name}</text>`;
+      if (st.n === 0) { s += `<text x="${labW + 4}" y="${y + barH - 1}" class="ax">no data yet</text>`; return; }
+      const tipHtml = `<b>${esc(g.name)} · ${name}</b><br>median ${st.med} d · p90 ${Math.round(st.p90 * 10) / 10} d<br>n = ${st.n}`;
+      s += `<rect x="${labW}" y="${y}" width="${Math.max(2, sx(st.med))}" height="${barH}" rx="2" fill="${color}" data-tip="${esc(tipHtml)}"></rect>`;
+      s += `<rect x="${labW + sx(st.p90) - 1}" y="${y - 2}" width="2" height="${barH + 4}" fill="var(--fg)" data-tip="${esc(tipHtml)}"></rect>`;
+      s += `<text x="${labW + sx(st.med) + 5}" y="${y + barH - 1}" class="val" font-size="11">${st.med}</text>`;
+    });
+  });
+  s += '</svg>';
+  el.innerHTML = s; bindTips(el);
+  const liveRows = rows.filter(r => r.stage === 'Live');
+  const share = liveRows.length ? median(liveRows.map(r => r.dWait)) / Math.max(1, median(liveRows.map(r => r.dTotal))) : null;
+  document.getElementById('legSub').textContent = liveRows.length ? `Ready → Onboarding is ${Math.round(100 * liveRows.reduce((a, r) => a + r.dWait, 0) / liveRows.reduce((a, r) => a + r.dTotal, 0))}% of total time to live` : '';
+}
+
+// ---------- heatmap
+function weeksUpTo() {
+  const cw = RAW.map(r => parse(r.cw)).filter(t => t <= R);
+  const first = weekStart(Math.min(...cw));
+  const last = weekStart(Math.max(...cw));   // stop at the last week with a closed-won merchant
+  const out = []; for (let w = first; w <= last; w += 7 * DAY) out.push(w); return out;
+}
+function heatValue(rows, m) {
+  if (!rows.length) return null;
+  if (m === 'live7') { const x = rate(rows, 'liveT'); return x.resolved ? { v: x.rate, text: pct(x.rate), n: x.resolved, bad: 1 - x.rate } : { pending: true }; }
+  if (m === 'ready2') { const x = rate(rows, 'readyT'); return x.resolved ? { v: x.rate, text: pct(x.rate), n: x.resolved, bad: 1 - x.rate } : { pending: true }; }
+  if (m === 'wait') { const v = rows.map(r => r.dWait).filter(x => x != null); if (!v.length) return { pending: true }; const md = median(v); return { v: md, text: md + 'd', n: v.length, bad: Math.min(1, md / 10) }; }
+  if (m === 'overdue') { const n = rows.filter(r => r.overdue).length; return { v: n, text: String(n), n: rows.length, bad: Math.min(1, n / 12) }; }
+  if (m === 'volume') { return { v: rows.length, text: String(rows.length), n: rows.length, bad: Math.min(1, rows.length / 14) }; }
+}
+function mix(t) { return `color-mix(in oklab, var(--heat-lo), var(--heat-hi) ${Math.round(t * 100)}%)`; }
+function renderHeat(rows) {
+  const weeks = weeksUpTo();
+  const mkts = market ? [market] : [...MARKETS, 'All'];
+  const sub = { live7: 'Share of each closed-won week\'s merchants that went live within 7 days (open merchants past 7 days count as misses).', ready2: 'Share of each closed-won week\'s merchants that were ready for activation within 2 days.', wait: 'Median days from Ready for activation to the onboarding session, by closed-won week.', overdue: 'Merchants from each closed-won week that are not live and are past 7 days.', volume: 'How many merchants Commercial handed over each week.' }[heatMetric];
+  document.getElementById('heatSub').textContent = sub;
+  let h = '<thead><tr><th class="rowh">Closed-won week</th>' + weeks.map(w => `<th>${fmtD(w)}</th>`).join('') + '</tr></thead><tbody>';
+  mkts.forEach(m => {
+    h += `<tr><th class="rowh">${esc(m)}</th>`;
+    weeks.forEach(w => {
+      const cell = rows.filter(r => (m === 'All' || r.market === m) && weekStart(r.cwT) === w);
+      const hv = heatValue(cell, heatMetric);
+      if (!hv) { h += '<td><div class="cell empty">—</div></td>'; return; }
+      if (hv.pending) { h += `<td><div class="cell empty" data-tip="${esc(`<b>${esc(m)} · week of ${fmtD(w)}</b><br>${cell.length} closed won, none past the target window yet`)}"><b>…</b><i>n ${cell.length}</i></div></td>`; return; }
+      const dark = hv.bad > 0.55;
+      const tipHtml = `<b>${esc(m)} · week of ${fmtD(w)}</b><br>${hv.text} · ${cell.length} merchant${cell.length > 1 ? 's' : ''} closed won` + (heatMetric === 'live7' || heatMetric === 'ready2' ? `<br>${hv.n} with a known outcome` : '');
+      h += `<td><div class="cell" style="background:${mix(hv.bad)};color:${dark ? 'var(--panel)' : 'var(--fg)'}" data-tip="${esc(tipHtml)}"><b>${hv.text}</b><i>n ${cell.length}</i></div></td>`;
+    });
+    h += '</tr>';
+  });
+  h += '</tbody>';
+  const t = document.getElementById('heat'); t.innerHTML = h; bindTips(t);
+  const lg = { live7: ['healthier', 'needs attention'], ready2: ['healthier', 'needs attention'], wait: ['shorter wait', 'longer wait'], overdue: ['fewer overdue', 'more overdue'], volume: ['fewer', 'more'] }[heatMetric];
+  document.getElementById('heatLo').textContent = lg[0]; document.getElementById('heatHi').textContent = lg[1];
+  document.getElementById('heatNote').textContent = 'n = merchants closed won that week · … = none past the target window yet';
+}
+
+// ---------- small multiples
+function renderMultiples(rows) {
+  const weeks = weeksUpTo();
+  const mkts = market ? [market] : [...MARKETS, 'All'];
+  const wrap = document.getElementById('multiples');
+  wrap.innerHTML = mkts.map(m => `<div class="multiple"><h3>${esc(m)}</h3><div class="chart" data-m="${esc(m)}"></div><div class="note"></div></div>`).join('');
+  wrap.querySelectorAll('.multiple').forEach(box => {
+    const m = box.querySelector('.chart').dataset.m;
+    const sub = rows.filter(r => m === 'All' || r.market === m);
+    const series = [
+      ['Closed won', 'var(--c1)', weeks.map(w => sub.filter(r => weekStart(r.cwT) === w).length)],
+      ['Became ready', 'var(--c2)', weeks.map(w => sub.filter(r => r.rdT && weekStart(r.rdT) === w).length)],
+      ['Onboarding started', 'var(--c3)', weeks.map(w => sub.filter(r => r.obT && weekStart(r.obT) === w).length)],
+    ];
+    const el = box.querySelector('.chart');
+    const W = Math.max(200, el.clientWidth), H = 150, L = 24, Rp = 10, T = 10, B = 24;
+    const max = Math.max(4, ...series.flatMap(s => s[2]));
+    const yMax = Math.ceil(max / 4) * 4;
+    const sx = i => L + (W - L - Rp) * (weeks.length > 1 ? i / (weeks.length - 1) : 0.5);
+    const sy = v => T + (H - T - B) * (1 - v / yMax);
+    let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Weekly closed won, became ready, and onboarding started for ${esc(m)}">`;
+    for (let v = 0; v <= yMax; v += yMax / 4) s += `<line class="grid" x1="${L}" x2="${W - Rp}" y1="${sy(v)}" y2="${sy(v)}"></line><text class="ax" x="${L - 5}" y="${sy(v) + 4}" text-anchor="end">${v}</text>`;
+    weeks.forEach((w, i) => { if (i % 2 === 0 || weeks.length < 6) s += `<text class="ax" x="${sx(i)}" y="${H - 6}" text-anchor="middle">${fmtD(w)}</text>`; });
+    series.forEach(([name, color, vals]) => {
+      s += `<path d="${vals.map((v, i) => (i ? 'L' : 'M') + sx(i) + ' ' + sy(v)).join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>`;
+      vals.forEach((v, i) => { s += `<circle cx="${sx(i)}" cy="${sy(v)}" r="4" fill="${color}" stroke="var(--panel)" stroke-width="2"></circle>`; });
+    });
+    weeks.forEach((w, i) => {
+      const tipHtml = `<b>${esc(m)} · week of ${fmtD(w)}</b><br>` + series.map(([n, , v]) => `${n}: ${v[i]}`).join('<br>');
+      s += `<rect class="hit" x="${sx(i) - (W - L - Rp) / (2 * Math.max(1, weeks.length - 1))}" y="0" width="${(W - L - Rp) / Math.max(1, weeks.length - 1)}" height="${H - B}" data-tip="${esc(tipHtml)}"></rect>`;
+    });
+    s += '</svg>';
+    el.innerHTML = s; bindTips(el);
+    const half = Math.floor(weeks.length / 2);
+    const recent = i => series[i][2].slice(half).reduce((a, b) => a + b, 0), early = i => series[i][2].slice(0, half).reduce((a, b) => a + b, 0);
+    const queue = sub.filter(r => r.stage === 'Ready for activation').length;
+    box.querySelector('.note').textContent = weeks.length > 3 ? `Closed won ${early(0)} → ${recent(0)} (first vs second half) · onboarding starts ${early(2)} → ${recent(2)} · ${queue} waiting now` : `${queue} waiting now`;
+  });
+}
+
+// ---------- work queue
+function renderQueue(rows) {
+  const chipsEl = document.getElementById('chips');
+  const defs = [
+    ['overdueReady', 'In Ready and past 7 days', r => r.stage === 'Ready for activation' && r.overdue],
+    ['blocked', 'Blocked on setup data', r => r.stage === 'Closed won' && r.missing.length > 0],
+    ['readyRisk', 'Not ready and past 2 days', r => r.stage === 'Closed won' && r.age > 2],
+    ['onb', 'In onboarding', r => r.stage === 'Onboarding'],
+    ['lateLive', 'Went live late', r => r.liveT === 'missed'],
+  ];
+  chipsEl.innerHTML = defs.map(([k, label, fn]) => `<button type="button" class="chip${chip === k ? ' on' : ''}" data-chip="${k}">${label} · ${rows.filter(fn).length}</button>`).join('');
+  chipsEl.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => { chip = chip === b.dataset.chip ? '' : b.dataset.chip; if (chip) { stageFilter = 'all'; document.getElementById('stageFilter').value = 'all'; } render(); }));
+
+  let list = rows.filter(r => stageFilter === 'all' || (stageFilter === 'open' ? r.stage !== 'Live' : r.stage === stageFilter));
+  if (chip) { const fn = defs.find(d => d[0] === chip)[2]; list = list.filter(fn); }
+  if (search) { const q = search.toLowerCase(); list = list.filter(r => r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q)); }
+  const liveStatus = r => r.liveT === 'met' ? ['Met', 'ok'] : r.liveT === 'missed' ? [`Missed (${r.dTotal} d)`, 'miss'] : r.liveT === 'openlate' ? [`Overdue ${r.age - 7} d`, 'miss'] : [`Due in ${7 - r.age} d`, 'ok'];
+  const keyFns = {
+    priority: r => (r.overdue ? 0 : r.stage === 'Live' ? 2 : 1) * 1000 - r.age,
+    name: r => r.name, market: r => r.market, stage: r => STAGES.indexOf(r.stage), daysInStage: r => r.daysInStage, age: r => r.age,
+    live: r => r.liveT === 'openlate' ? -r.age : r.liveT === 'missed' ? 100 - r.dTotal : r.liveT === 'pending' ? 200 - r.age : 300,
+    setup: r => r.missing.length, action: r => r.action,
+  };
+  const kf = keyFns[sortKey] || keyFns.priority;
+  list.sort((a, b) => { const x = kf(a), y = kf(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
+  const cols = [['priority', 'Merchant'], ['market', 'Market'], ['stage', 'Stage'], ['daysInStage', 'Days in stage', 'num'], ['age', 'Days since closed won', 'num'], ['live', '7-day target'], ['setup', 'Setup data'], ['action', 'Next action']];
+  let h = '<thead><tr>' + cols.map(([k, label, cls]) => `<th class="${cls || ''}" data-sort="${k}">${label}${sortKey === k ? `<span class="arrow">${sortDir > 0 ? '↑' : '↓'}</span>` : ''}</th>`).join('') + '</tr></thead><tbody>';
+  if (!list.length) h += '<tr class="empty-row"><td colspan="8">No merchants match these filters.</td></tr>';
+  list.forEach(r => {
+    const [lt, lc] = liveStatus(r);
+    const setup = r.missing.length ? `<span class="miss">Missing ${r.missing.join(' + ')}</span>` : '<span class="ok">Menu ✓ · Drone loading ✓</span>';
+    h += `<tr><td><div class="name">${esc(r.name)}</div><div class="id">${esc(r.id)} · closed won ${fmtD(r.cwT)}</div></td><td>${esc(r.market)}</td><td><span class="stage" style="--sc:${STAGE_VAR[r.stage]}">${r.stage}</span></td><td class="num">${r.daysInStage}</td><td class="num">${r.age}</td><td><span class="${lc}">${lt}</span></td><td>${setup}</td><td>${r.action || '<span class="ok">—</span>'}</td></tr>`;
+  });
+  h += '</tbody>';
+  const t = document.getElementById('queue'); t.innerHTML = h;
+  t.querySelectorAll('th').forEach(th => th.addEventListener('click', () => { const k = th.dataset.sort; if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = 1; } render(); }));
+  document.getElementById('queueCount').textContent = `${list.length} merchant${list.length === 1 ? '' : 's'}`;
+  document.getElementById('queueSub').textContent = 'Sorted by priority: overdue first, then oldest. Click a column to re-sort.';
+}
+
+function render() {
+  const all = compute();
+  const rows = market ? all.filter(r => r.market === market) : all;
+  renderKpis(all, rows); renderPipeline(rows); renderLegs(rows); renderHeat(rows); renderMultiples(rows); renderQueue(rows);
+}
+
+// ---------- controls
+const dateEl = document.getElementById('reportDate');
+dateEl.value = iso(R);
+dateEl.addEventListener('change', () => { const t = parse(dateEl.value); if (t) { R = t; render(); } });
+document.getElementById('dMinus').addEventListener('click', () => { R -= 7 * DAY; dateEl.value = iso(R); render(); });
+document.getElementById('dPlus').addEventListener('click', () => { R += 7 * DAY; dateEl.value = iso(R); render(); });
+document.getElementById('dLatest').addEventListener('click', () => { R = LATEST; dateEl.value = iso(R); render(); });
+const mSel = document.getElementById('marketSel');
+MARKETS.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; mSel.appendChild(o); });
+mSel.addEventListener('change', () => { market = mSel.value; render(); });
+document.getElementById('heatMetric').addEventListener('change', e => { heatMetric = e.target.value; render(); });
+document.getElementById('stageFilter').addEventListener('change', e => { stageFilter = e.target.value; chip = ''; render(); });
+document.getElementById('search').addEventListener('input', e => { search = e.target.value.trim(); renderQueue(market ? compute().filter(r => r.market === market) : compute()); });
+let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 120); });
+render();
+</script>
+
+</body>
+</html>
